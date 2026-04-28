@@ -1,20 +1,24 @@
+from functools import lru_cache
+from collections import deque
 from heapq import heappush, heappop
 import sys
+from time import perf_counter
 sys.setrecursionlimit(2000)
 
 GOAL = (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,0)
 
 # example
 # puzzle = [[1,2,4,8],[5,7,11,10],[13,15,0,3],[14,6,9,12]]
-# puzzle = [[14,10,6,0],[4,9,1,8],[2,3,5,11],[12,13,7,15]]
+puzzle = [[14,10,6,0],[4,9,1,8],[2,3,5,11],[12,13,7,15]]
 # puzzle = [[5,1,3,4],[2,7,8,12],[9,6,11,15],[0,13,10,14]]
-puzzle = [[6,10,3,15],[14,8,7,11],[5,1,0,2],[13,12,9,4]]
+# puzzle = [[6,10,3,15],[14,8,7,11],[5,1,0,2],[13,12,9,4]]
 # puzzle = [[11,3,1,7],[4,6,8,2],[15,9,10,13],[14,12,5,0]]
 # puzzle = [[0,5,15,14],[7,9,6,13],[1,2,12,10],[8,11,4,3]]
 
 def flatten(puzzle):
     return tuple(puzzle[i][j] for i in range(4) for j in range(4))
 
+@lru_cache(maxsize=None)
 def manhatten(state):
     total = 0
     for idx, val in enumerate(state):
@@ -26,6 +30,7 @@ def manhatten(state):
         total += abs(cur_i - tar_i) + abs(cur_j - tar_j)
     return total
 
+@lru_cache(maxsize=None)
 def linear_conflict(state):
     conflict = 0
     # 行冲突
@@ -62,9 +67,80 @@ def linear_conflict(state):
                     conflict += 2
     return conflict
 
+@lru_cache(maxsize=None)
+def _vertical_signature(state):
+    signature = []
+    for row in range(4):
+        counts = [0, 0, 0, 0, 0]
+        for col in range(4):
+            value = state[row * 4 + col]
+            if value == 0:
+                counts[4] += 1
+            else:
+                counts[(value - 1) // 4] += 1
+        signature.append(tuple(counts))
+    return tuple(signature)
+
+
+@lru_cache(maxsize=None)
+def _horizontal_signature(state):
+    signature = []
+    for col in range(4):
+        counts = [0, 0, 0, 0, 0]
+        for row in range(4):
+            value = state[row * 4 + col]
+            if value == 0:
+                counts[4] += 1
+            else:
+                counts[(value - 1) % 4] += 1
+        signature.append(tuple(counts))
+    return tuple(signature)
+
+
+def _build_walking_distance_table(goal_signature):
+    table = {goal_signature: 0}
+    queue = deque([goal_signature])
+
+    while queue:
+        state = queue.popleft()
+        distance = table[state]
+        blank_row = next(index for index, row in enumerate(state) if row[4])
+
+        for delta in (-1, 1):
+            neighbour_row = blank_row + delta
+            if not (0 <= neighbour_row < 4):
+                continue
+
+            neighbour = state[neighbour_row]
+            for tile_kind in range(4):
+                if neighbour[tile_kind] == 0:
+                    continue
+
+                next_rows = [list(row) for row in state]
+                next_rows[blank_row][tile_kind] += 1
+                next_rows[blank_row][4] -= 1
+                next_rows[neighbour_row][tile_kind] -= 1
+                next_rows[neighbour_row][4] += 1
+                next_state = tuple(tuple(row) for row in next_rows)
+
+                if next_state not in table:
+                    table[next_state] = distance + 1
+                    queue.append(next_state)
+
+    return table
+
+
+VERTICAL_WD_TABLE = _build_walking_distance_table(_vertical_signature(GOAL))
+HORIZONTAL_WD_TABLE = _build_walking_distance_table(_horizontal_signature(GOAL))
+
+
+@lru_cache(maxsize=None)
 def h(state):
+    # return VERTICAL_WD_TABLE[_vertical_signature(state)] + HORIZONTAL_WD_TABLE[_horizontal_signature(state)]
+    # return manhatten(state)
     return manhatten(state) + linear_conflict(state)
 
+@lru_cache(maxsize=None)
 def is_solvable(state):
     idx = state.index(0)
     row_from_bottom = 4 - (idx // 4)
@@ -92,26 +168,29 @@ def get_neighbours(state):
             neighbours.append((next_state,moved_number))
     return neighbours
 
-def A_star(puzzle):
+def A_star(puzzle, with_stats=False):
     start = flatten(puzzle)
     if start == GOAL:
-        return []
+        return ([], 0, 0.0) if with_stats else []
     if is_solvable(start) == 0:
-        return []
+        return ([], 0, 0.0) if with_stats else []
+    start_time = perf_counter()
     
     #init
-    # open_set 元素: (f,g,state)
+    # open_set 元素: (f,h,g,state)
     open_heap = []
     g_scores = {start:0}
     parents = {start:(None, None)}
+    expanded_nodes = 0
 
     f_start = h(start)
-    heappush(open_heap,(f_start,0,start))
+    heappush(open_heap,(f_start,f_start,0,start))
     
     while open_heap:
-        f_cur, g_cur, state_cur = heappop(open_heap)
+        _, _, g_cur, state_cur = heappop(open_heap)
         if g_cur > g_scores.get(state_cur,float('inf')):
             continue
+        expanded_nodes += 1
         if state_cur == GOAL:
             # 回溯
             path = []
@@ -119,57 +198,84 @@ def A_star(puzzle):
                 path.append(parents[state_cur][1])
                 state_cur = parents[state_cur][0]
             path.reverse()
+            if with_stats:
+                return path, expanded_nodes, perf_counter() - start_time
             return path
-        neighbours = get_neighbours(state_cur)
-        for next_state, moved_number in neighbours:
-            if g_cur + 1 >= g_scores.get(next_state, float('inf')):
+        
+        for next_state, moved_number in get_neighbours(state_cur):
+            g_new = g_cur + 1
+            if g_new >= g_scores.get(next_state, float('inf')):
                 continue
             parents[next_state] = (state_cur, moved_number)
-            g_scores[next_state] = g_cur + 1
-            f_new = h(next_state) + g_cur + 1
-            heappush(open_heap,(f_new,g_cur+1,next_state))
+            g_scores[next_state] = g_new
+            h_new = h(next_state)
+            f_new = h_new + g_new
+            heappush(open_heap,(f_new, h_new ,g_new ,next_state))
+    if with_stats:
+        return [], expanded_nodes, perf_counter() - start_time
     return []
 
-def IDA_star(puzzle):
+def IDA_star(puzzle, with_stats=False):
     start = flatten(puzzle)
     if start == GOAL:
-        return []
+        return ([], 0, 0.0) if with_stats else []
     if is_solvable(start) == 0:
-        return []
-    limit = h(start)
-    path_set = set()
-    path = []
+        return ([], 0, 0.0) if with_stats else []
 
-    def dfs(state, g, next_limit_ref):
+    start_time = perf_counter()
+    limit = h(start)
+    expanded_nodes = 0
+
+    def dfs(state, g, limit_now, path, path_set):
+        nonlocal expanded_nodes
         f = g + h(state)
-        if f > limit:
-            next_limit_ref[0] = min(next_limit_ref[0],f)
-            return False
+        if f > limit_now:
+            return f
+
+        expanded_nodes += 1
         if state == GOAL:
-            return True
+            return -1
+
+        min_limit = float('inf')
         for next_state, moved_number in get_neighbours(state):
             if next_state in path_set:
                 continue
+
             path.append(moved_number)
             path_set.add(next_state)
-            if dfs(next_state, g+1, next_limit_ref):
-                return True
+
+            d = dfs(next_state, g + 1, limit_now, path, path_set)
+            if d == -1:
+                return -1
+            if d < min_limit:
+                min_limit = d
+
             path.pop()
             path_set.remove(next_state)
-        return False
-    
+
+        return min_limit
+
     while True:
-        next_limit = [float('inf')]
-        path_set.clear()
-        path.clear()
-        path_set.add(start)
-        if dfs(start, 0, next_limit):
+        path = []
+        path_set = {start}
+        d = dfs(start, 0, limit, path, path_set)
+
+        if d == -1:
+            if with_stats:
+                return path, expanded_nodes, perf_counter() - start_time
             return path
-        if next_limit[0] == float('inf'):
+
+        if d == float('inf'):
+            if with_stats:
+                return [], expanded_nodes, perf_counter() - start_time
             return []
-        limit = next_limit[0]
+
+        limit = d
 
 
 if __name__ == "__main__":
-    print(A_star(puzzle))     
-    # print(IDA_star(puzzle))   
+    solution, expanded_nodes, elapsed = IDA_star(puzzle, with_stats=True)
+    print(solution)
+    print(f"步数: {len(solution)}")
+    print(f"扩展节点数: {expanded_nodes}")
+    print(f"所用时间: {elapsed:.6f} 秒")
