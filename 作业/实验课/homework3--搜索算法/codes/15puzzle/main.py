@@ -2,6 +2,7 @@ from functools import lru_cache
 from collections import deque
 from heapq import heappush, heappop
 import sys
+import os
 from time import perf_counter
 sys.setrecursionlimit(2000)
 
@@ -9,7 +10,7 @@ GOAL = (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,0)
 
 # example
 # puzzle = [[1,2,4,8],[5,7,11,10],[13,15,0,3],[14,6,9,12]]
-puzzle = [[14,10,6,0],[4,9,1,8],[2,3,5,11],[12,13,7,15]]
+# puzzle = [[14,10,6,0],[4,9,1,8],[2,3,5,11],[12,13,7,15]]
 # puzzle = [[5,1,3,4],[2,7,8,12],[9,6,11,15],[0,13,10,14]]
 # puzzle = [[6,10,3,15],[14,8,7,11],[5,1,0,2],[13,12,9,4]]
 # puzzle = [[11,3,1,7],[4,6,8,2],[15,9,10,13],[14,12,5,0]]
@@ -270,12 +271,31 @@ def IDA_star(puzzle, with_stats=False):
                 return [], expanded_nodes, perf_counter() - start_time
             return []
 
-        limit = d
+        limit = d + 5
 
 
 if __name__ == "__main__":
-    solution, expanded_nodes, elapsed = IDA_star(puzzle, with_stats=True)
-    print(solution)
-    print(f"步数: {len(solution)}")
-    print(f"扩展节点数: {expanded_nodes}")
-    print(f"所用时间: {elapsed:.6f} 秒")
+    EXAMPLES = [
+        [[1,2,4,8],[5,7,11,10],[13,15,0,3],[14,6,9,12]],
+        [[14,10,6,0],[4,9,1,8],[2,3,5,11],[12,13,7,15]],
+        [[5,1,3,4],[2,7,8,12],[9,6,11,15],[0,13,10,14]],
+        [[6,10,3,15],[14,8,7,11],[5,1,0,2],[13,12,9,4]],
+        [[11,3,1,7],[4,6,8,2],[15,9,10,13],[14,12,5,0]],
+        [[0,5,15,14],[7,9,6,13],[1,2,12,10],[8,11,4,3]],
+    ]
+
+    results_path = os.path.join(os.path.dirname(__file__), "results.txt")
+    # 写入表头（覆盖已有文件）
+    with open(results_path, "w", encoding="utf-8") as f:
+        f.write("id,steps,expanded_nodes,time_seconds\n")
+
+    for i, puzzle in enumerate(EXAMPLES[:5], start=1):
+        print(f"Running example {i}...")
+        solution, expanded_nodes, elapsed = A_star(puzzle, with_stats=True)
+        steps = len(solution)
+        print(f"Example {i}: 步数={steps}, 扩展节点={expanded_nodes}, 用时={elapsed:.6f}s")
+
+        with open(results_path, "a", encoding="utf-8") as f:
+            f.write(f"{i},{steps},{expanded_nodes},{elapsed:.6f}\n")
+
+    print(f"All done. Results written to: {results_path}")
