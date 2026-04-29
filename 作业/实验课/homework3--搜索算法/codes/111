@@ -1,8 +1,5 @@
 import numpy as np
 import random
-import os
-import sys
-import time
 
 class GeneticAlgTSP:
     def __init__(self, filename):
@@ -12,7 +9,7 @@ class GeneticAlgTSP:
             self.distance_matrix = self.create_distance_matrix()
         # set hyper_params
             self.pop_size = 50
-            self.mutation_rate = 0.2
+            self.mutation_rate = 0.01
         # init population
             self.population = []
             for _ in range(self.pop_size):
@@ -124,30 +121,3 @@ class GeneticAlgTSP:
         return [city+1 for city in best_route]
                 
 ####################################################
-
-def main():
-    base = os.path.dirname(__file__)
-    tsp_path = os.path.join(base, 'dj38.tsp')
-    iterations = 100000
-    if len(sys.argv) > 1:
-        try:
-            iterations = int(sys.argv[1])
-        except Exception:
-            pass
-
-    print(f"Loading TSP from {tsp_path}, iterations={iterations}")
-    ga = GeneticAlgTSP(tsp_path)
-    start = time.time()
-    best_route = ga.iterate(iterations)
-    elapsed = time.time() - start
-
-    best_route0 = [r-1 for r in best_route]
-    best_distance = ga.objective(best_route0)
-
-    print(f"Best route (1-based): {best_route}")
-    print(f"Best distance: {best_distance:.2f}")
-    print(f"Elapsed time: {elapsed:.2f}s")
-
-
-if __name__ == "__main__":
-    main()
