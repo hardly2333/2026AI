@@ -1,17 +1,23 @@
 from functools import lru_cache
 from collections import deque
 from heapq import heappush, heappop
+import math
 import sys
 import os
 from time import perf_counter
+import numpy as np
 # IDA* 递归深度可能较大，适当提高递归上限。
 sys.setrecursionlimit(2000)
 
 # 目标状态：按 1 到 15 排列，空格 0 放在最后。
 GOAL = (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,0)
 
+PATTERN_FACT = (1, 1, 2, 6, 24, 120, 720, 5040)
+PDB_PATH = os.path.join(os.path.dirname(__file__), "pdb.npy")
+_PDB = None
+
 # 非可加性模式数据库使用的模式：只跟踪这 7 个数字和空格的位置。
-PATTERN_TILES = (1, 2, 3, 4, 5, 9, 13)
+PATTERN_TILES = (1, 2, 3, 4, 5, 9)
 PATTERN_INDEX = {tile: index for index, tile in enumerate(PATTERN_TILES)}
 PATTERN_ADJACENT = tuple(
     tuple(
@@ -165,80 +171,68 @@ HORIZONTAL_WD_TABLE = build_walking_distance_table(horizontal_signature(GOAL))
 # 非可加性模式数据库启发式
 ##################################################
 
-def pattern_signature(state):
-    # 只保留模式中的 7 个数字和空格的位置，其他数字在抽象空间中忽略。
-    positions = [0] * len(PATTERN_TILES)
-    blank = 0
+def comb_rank(comb):
+    rank = 0
+    previous = -1
+    for i, position in enumerate(comb):
+        for candidate in range(previous + 1, position):
+            rank += math.comb(15 - candidate, 6 - i)
+        previous = position
+    return rank
+
+
+def perm_rank(perm):
+    rank = 0
+    for i in range(7):
+        smaller = 0
+        current = perm[i]
+        for j in range(i + 1, 7):
+            if perm[j] < current:
+                smaller += 1
+        rank += smaller * PATTERN_FACT[6 - i]
+    return rank
+
+
+def load_pattern_database():
+    global _PDB
+    if _PDB is None:
+        _PDB = np.load(PDB_PATH, mmap_mode="r")
+    return _PDB
+
+
+def pattern_database_rank(state):
+    positions = []
+    permutation = []
     for index, value in enumerate(state):
         if value == 0:
-            blank = index
+            positions.append(index)
+            permutation.append(0)
         elif value in PATTERN_INDEX:
-            positions[PATTERN_INDEX[value]] = index
-    return tuple(positions + [blank])
+            positions.append(index)
+            permutation.append(PATTERN_INDEX[value] + 1)
+
+    if len(positions) != 7:
+        return 0
+
+    return comb_rank(positions) * 5040 + perm_rank(permutation)
 
 
-def pattern_successors(signature):
-    # 在抽象状态空间中，空格与相邻格交换；若交换到的是模式数字，则代价为 1，否则代价为 0。
-    positions = list(signature[:-1])
-    blank = signature[-1]
-    occupied = {pos: idx for idx, pos in enumerate(positions)}
-
-    for neighbour in PATTERN_ADJACENT[blank]:
-        if neighbour in occupied:
-            tile_idx = occupied[neighbour]
-            next_positions = positions.copy()
-            next_positions[tile_idx] = blank
-            yield tuple(next_positions + [neighbour]), 1
-        else:
-            yield tuple(positions + [neighbour]), 0
-
-
-PATTERN_GOAL_SIGNATURE = pattern_signature(GOAL)
-def build_pattern_database():
-    # 先构建完整的模式数据库表，再在启发式函数里做查询。
-    table = {PATTERN_GOAL_SIGNATURE: 0}
-    queue = deque([PATTERN_GOAL_SIGNATURE])
-
-    while queue:
-        signature = queue.popleft()
-        distance = table[signature]
-
-        for next_signature, step_cost in pattern_successors(signature):
-            next_distance = distance + step_cost
-            if next_signature not in table or next_distance < table[next_signature]:
-                table[next_signature] = next_distance
-                queue.append(next_signature)
-
-    return table
-
-
-PATTERN_PDB_TABLE = None
-
-
-def init_pattern_database():
-    # 在程序开始时一次性构建模式数据库，避免搜索过程中重复初始化。
-    global PATTERN_PDB_TABLE
-    if PATTERN_PDB_TABLE is None:
-        PATTERN_PDB_TABLE = build_pattern_database()
-    return PATTERN_PDB_TABLE
-
-
+@lru_cache(maxsize=None)
 def pattern_database(state):
-    # 模式数据库接口：直接查询已经构建好的模式表。
-    if PATTERN_PDB_TABLE is None:
-        raise ValueError("PATTERN_PDB_TABLE is not built, call init_pattern_database() first.")
-    return PATTERN_PDB_TABLE[pattern_signature(state)]
+    pdb = load_pattern_database()
+    return int(pdb[pattern_database_rank(state)])
 
-# 
+
+
 
 #########################################################################
 
 # 选择启发式函数
 @lru_cache(maxsize=None)
 def h(state):
-    # return VERTICAL_WD_TABLE[vertical_signature(state)] + HORIZONTAL_WD_TABLE[horizontal_signature(state)]
+    return VERTICAL_WD_TABLE[vertical_signature(state)] + HORIZONTAL_WD_TABLE[horizontal_signature(state)]
     # return manhatten(state)
-    return manhatten(state) + linear_conflict(state)
+    # return manhatten(state) + linear_conflict(state)
     # return pattern_database(state)
 
 # 依据 15-puzzle 的逆序数与空格所在行判断状态是否可解。
@@ -385,12 +379,12 @@ def IDA_star(puzzle, with_stats=False):
 if __name__ == "__main__":
     # PPT中给的六个测试样例
     EXAMPLES = [
-        [[1,2,4,8],[5,7,11,10],[13,15,0,3],[14,6,9,12]],
-        [[14,10,6,0],[4,9,1,8],[2,3,5,11],[12,13,7,15]],
-        [[5,1,3,4],[2,7,8,12],[9,6,11,15],[0,13,10,14]],
-        [[6,10,3,15],[14,8,7,11],[5,1,0,2],[13,12,9,4]],
+        # [[1,2,4,8],[5,7,11,10],[13,15,0,3],[14,6,9,12]],
+        # [[14,10,6,0],[4,9,1,8],[2,3,5,11],[12,13,7,15]],
+        # [[5,1,3,4],[2,7,8,12],[9,6,11,15],[0,13,10,14]],
+        # [[6,10,3,15],[14,8,7,11],[5,1,0,2],[13,12,9,4]],
         [[11,3,1,7],[4,6,8,2],[15,9,10,13],[14,12,5,0]],
-        [[0,5,15,14],[7,9,6,13],[1,2,12,10],[8,11,4,3]],
+        # [[0,5,15,14],[7,9,6,13],[1,2,12,10],[8,11,4,3]],
     ]
 
     results_path = os.path.join(os.path.dirname(__file__), "results.txt")

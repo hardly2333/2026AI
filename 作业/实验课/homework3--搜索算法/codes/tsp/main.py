@@ -9,14 +9,15 @@ import argparse
 class GeneticAlgTSP:
 
     # 初始化：读取 TSP 文件、构建距离矩阵、设置超参数并生成初始种群。
-    def __init__(self, filename):
+    def __init__(self, filename, pop_size=50, mutation_rate=0.2, tournament_k=5):
         # init cities
             self.cities = self.read_tsp_file(filename)
             self.num_cities = len(self.cities)
             self.distance_matrix = self.create_distance_matrix()
         # set hyper_params
-            self.pop_size = 50
-            self.mutation_rate = 0.2
+            self.pop_size = pop_size
+            self.mutation_rate = mutation_rate
+            self.tournament_k = tournament_k
         # init population
             self.population = []
             for _ in range(self.pop_size):
@@ -76,7 +77,10 @@ class GeneticAlgTSP:
 #######################################################
 #  选择：轮盘赌选择和锦标赛选择两种方法，默认使用轮盘赌选择
 #######################################################
-    def tournament_selection(self, k=5):
+    def tournament_selection(self, k=None):
+        if k is None:
+            k = self.tournament_k
+        k = min(k, self.pop_size)
         candidates_idx = random.sample(range(self.pop_size), k)
         candidates = [self.population[i] for i in candidates_idx]
         best_candidate = max(candidates, key=self.fitness)
@@ -89,8 +93,7 @@ class GeneticAlgTSP:
         return self.population[idx]
 
     def selection(self):
-        return self.roulette_wheel_selection()
-        # return self.tournament_selection()
+        return self.tournament_selection()
 
 
 ######################################################
@@ -132,11 +135,10 @@ class GeneticAlgTSP:
 ###################################################
     def iterate(self, num_iterations):
         for gen in range(num_iterations):
-            fitness_scores = [self.fitness(route) for route in self.population]
             new_population = []
             while len(new_population) < self.pop_size:
-                p1 = self.tournament_selection()
-                p2 = self.tournament_selection()
+                p1 = self.tournament_selection(self.tournament_k)
+                p2 = self.tournament_selection(self.tournament_k)
                 child = self.crossover(p1,p2)
                 child = self.mutation(child)
                 new_population.append(child)
@@ -145,20 +147,80 @@ class GeneticAlgTSP:
 
             # 每 100 代打印一次当前种群的第一条路径长度，用于观察收敛趋势。
             if (gen + 1) % 100 == 0 :
-                cur_best_dist = self.objective(self.population[0])
+                cur_best_route = min(self.population, key=self.objective)
+                cur_best_dist = self.objective(cur_best_route)
                 print(f"Iteration {gen+1} : best distance = {cur_best_dist:.2f}")
         # 返回 1-based 编号格式，便于和题目描述保持一致。
-        final_fitness = [self.fitness(route) for route in self.population]
-        best_route = self.population[np.argmax(final_fitness)]
+        best_route = min(self.population, key=self.objective)
         return [city+1 for city in best_route]
                 
 ####################################################
 
+def run_single_trial(tsp_path, iterations, pop_size, mutation_rate, tournament_k):
+    ga = GeneticAlgTSP(
+        tsp_path,
+        pop_size=pop_size,
+        mutation_rate=mutation_rate,
+        tournament_k=tournament_k,
+    )
+    best_route = ga.iterate(iterations)
+    best_route0 = [r - 1 for r in best_route]
+    best_distance = ga.objective(best_route0)
+    return best_route, best_distance
+
+
+def random_hyperparameter_search(tsp_path, trials=100, iterations=1000):
+    best_result = None
+
+    for trial in range(trials):
+        pop_size = random.randint(50, 200)
+        mutation_rate = random.uniform(0.05, 0.25)
+        tournament_k = random.randint(3, 8)
+
+        print(
+            f"\nTrial {trial + 1}/{trials}: "
+            f"pop_size={pop_size}, mutation_rate={mutation_rate:.4f}, k={tournament_k}"
+        )
+        best_route, best_distance = run_single_trial(
+            tsp_path,
+            iterations,
+            pop_size,
+            mutation_rate,
+            tournament_k,
+        )
+
+        print(f"Trial {trial + 1} best distance: {best_distance:.2f}")
+
+        if best_result is None or best_distance < best_result["distance"]:
+            best_result = {
+                "distance": best_distance,
+                "route": best_route,
+                "pop_size": pop_size,
+                "mutation_rate": mutation_rate,
+                "tournament_k": tournament_k,
+            }
+
+    print("\nBest hyperparameters found:")
+    print(
+        f"pop_size={best_result['pop_size']}, "
+        f"mutation_rate={best_result['mutation_rate']:.4f}, "
+        f"k={best_result['tournament_k']}"
+    )
+    print(f"Best distance: {best_result['distance']:.2f}")
+    print(f"Best route (1-based): {best_result['route']}")
+
+    return best_result
+
 def main():
-    # 命令行参数：数据集名称默认 dj38，迭代次数默认 100000。
+    # 命令行参数：默认对每个数据集做 100 次随机超参数搜索，每次迭代 1000 代。
     parser = argparse.ArgumentParser(description="Run GA on a TSP instance")
-    parser.add_argument("dataset", nargs="?", default="dj38", help="TSP dataset name without extension, default: dj38")
-    parser.add_argument("iterations", nargs="?", type=int, default=100000, help="Number of GA iterations, default: 100000")
+    parser.add_argument("dataset", nargs="?", default="qa194", help="TSP dataset name without extension, default: dj38")
+    parser.add_argument("iterations", nargs="?", type=int, default=500, help="Number of GA iterations per trial, default: 1000")
+    parser.add_argument("--trials", type=int, default=20, help="Number of random hyperparameter trials, default: 100")
+    parser.add_argument("--mode", choices=["search", "single"], default="search", help="Run random search or a single fixed configuration")
+    parser.add_argument("--pop-size", type=int, default=50, help="Population size for single mode")
+    parser.add_argument("--mutation-rate", type=float, default=0.2, help="Mutation rate for single mode")
+    parser.add_argument("--tournament-k", type=int, default=5, help="Tournament size for single mode")
     args = parser.parse_args()
 
     # 数据文件与当前脚本放在同一目录下，直接按文件名拼出路径。
@@ -168,19 +230,33 @@ def main():
         raise FileNotFoundError(f"TSP file not found: {tsp_path}")
 
     # 输出运行信息，并统计总耗时。
-    print(f"Loading TSP from {tsp_path}, iterations={args.iterations}")
-    ga = GeneticAlgTSP(tsp_path)
+    print(f"Loading TSP from {tsp_path}")
     start = time.time()
-    best_route = ga.iterate(args.iterations)
-    elapsed = time.time() - start
+    if args.mode == "search":
+        random_hyperparameter_search(tsp_path, trials=args.trials, iterations=args.iterations)
+        elapsed = time.time() - start
+        print(f"Elapsed time: {elapsed:.2f}s")
+    else:
+        print(
+            f"Running single trial with pop_size={args.pop_size}, "
+            f"mutation_rate={args.mutation_rate:.4f}, k={args.tournament_k}, iterations={args.iterations}"
+        )
+        ga = GeneticAlgTSP(
+            tsp_path,
+            pop_size=args.pop_size,
+            mutation_rate=args.mutation_rate,
+            tournament_k=args.tournament_k,
+        )
+        best_route = ga.iterate(args.iterations)
+        elapsed = time.time() - start
 
-    # 将结果转回 0-based 计算距离，再打印最终结果。
-    best_route0 = [r-1 for r in best_route]
-    best_distance = ga.objective(best_route0)
+        # 将结果转回 0-based 计算距离，再打印最终结果。
+        best_route0 = [r-1 for r in best_route]
+        best_distance = ga.objective(best_route0)
 
-    print(f"Best route (1-based): {best_route}")
-    print(f"Best distance: {best_distance:.2f}")
-    print(f"Elapsed time: {elapsed:.2f}s")
+        print(f"Best route (1-based): {best_route}")
+        print(f"Best distance: {best_distance:.2f}")
+        print(f"Elapsed time: {elapsed:.2f}s")
 
 
 if __name__ == "__main__":
